@@ -8,7 +8,7 @@ services:
       # models (MaskGCT, CAM++, BigVGAN) into checkpoints/hf_cache on first run.
       - ./checkpoints:/checkpoints
       - ./voices:/voices:ro
-      - ./hf_cache:/root/.cache/huggingface
+      - ./cache:/root/.cache
     environment:
       INDEXTTS_MODEL_DIR: "/checkpoints"
       INDEXTTS_DEVICE: "cuda"
@@ -28,7 +28,7 @@ services:
     volumes:
       - ./checkpoints:/checkpoints
       - ./voices:/voices:ro
-      - ./hf_cache:/root/.cache/huggingface
+      - ./cache:/root/.cache
     environment:
       INDEXTTS_MODEL_DIR: "/checkpoints"
       INDEXTTS_DEVICE: "cpu"

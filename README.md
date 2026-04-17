@@ -58,7 +58,7 @@ GPU (recommended):
 docker run --rm -p 8000:8000 --gpus all \
   -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/hf_cache:/root/.cache/huggingface \
+  -v $PWD/cache:/root/.cache \
   ghcr.io/seancheung/indextts-openai-tts-api:cuda-latest
 ```
 
@@ -68,7 +68,7 @@ CPU:
 docker run --rm -p 8000:8000 \
   -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/hf_cache:/root/.cache/huggingface \
+  -v $PWD/cache:/root/.cache \
   ghcr.io/seancheung/indextts-openai-tts-api:latest
 ```
 
