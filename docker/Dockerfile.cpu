@@ -14,16 +14,25 @@ ENV PYTHONUNBUFFERED=1 \
     INDEXTTS_USE_DEEPSPEED=false \
     PYTHONPATH=/opt/index-tts:/opt/api
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries; \
+    echo 'Acquire::http::Timeout "30";' > /etc/apt/apt.conf.d/99-timeout; \
+    echo 'Acquire::https::Timeout "30";' >> /etc/apt/apt.conf.d/99-timeout; \
+    for i in 1 2 3 4 5; do \
+        apt-get update && break; \
+        echo "apt-get update failed (attempt $i/5), sleeping..."; \
+        sleep $((i * 15)); \
+    done; \
+    apt-get install -y --no-install-recommends \
         git \
         git-lfs \
         build-essential \
         ffmpeg \
         libsndfile1 \
-        ca-certificates \
-    && python -m pip install --upgrade pip setuptools wheel \
-    && git lfs install \
-    && rm -rf /var/lib/apt/lists/*
+        ca-certificates; \
+    python -m pip install --upgrade pip setuptools wheel; \
+    git lfs install; \
+    rm -rf /var/lib/apt/lists/*
 
 # CPU-only PyTorch wheels
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
@@ -32,7 +41,7 @@ RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
 WORKDIR /opt/api
 
 COPY index-tts /opt/index-tts
-RUN pip install --no-build-isolation -e /opt/index-tts \
+RUN pip install /opt/index-tts \
     && pip install hf_transfer huggingface_hub
 
 COPY docker/requirements.api.txt /tmp/requirements.api.txt
