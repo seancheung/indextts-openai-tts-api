@@ -1,0 +1,53 @@
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    HF_HOME=/root/.cache/huggingface \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    PIP_NO_CACHE_DIR=1 \
+    INDEXTTS_REPO_DIR=/opt/index-tts \
+    PYTHONPATH=/opt/index-tts:/opt/api
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.10 \
+        python3.10-venv \
+        python3-pip \
+        python3.10-dev \
+        git \
+        git-lfs \
+        build-essential \
+        ffmpeg \
+        libsndfile1 \
+        ca-certificates \
+    && ln -sf /usr/bin/python3.10 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.10 /usr/local/bin/python3 \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch with CUDA 12.8 wheels (matches IndexTTS pyproject.toml pytorch-cuda index)
+RUN pip install --index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.8.0 torchaudio==2.8.0
+
+WORKDIR /opt/api
+
+# IndexTTS upstream as editable install so `indextts.*` is importable and large
+# asset directories (checkpoints, examples) are not copied into a wheel.
+COPY index-tts /opt/index-tts
+RUN pip install --no-build-isolation -e /opt/index-tts \
+    && pip install hf_transfer huggingface_hub
+
+COPY docker/requirements.api.txt /tmp/requirements.api.txt
+RUN pip install -r /tmp/requirements.api.txt
+
+COPY app /opt/api/app
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+VOLUME ["/voices", "/checkpoints", "/root/.cache/huggingface"]
+EXPOSE 8000
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8000"]

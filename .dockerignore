@@ -1,0 +1,39 @@
+.git/
+.gitignore
+.github/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.idea/
+.vscode/
+.DS_Store
+
+hf_cache/
+voices/
+checkpoints/
+tests/
+docs/
+scripts/
+
+README.md
+README.zh.md
+*.md
+*.log
+
+# Reduce submodule context sent to the Docker daemon. The upstream repo ships
+# large asset folders and its own git metadata which are unnecessary for
+# installing the `indextts` Python package.
+index-tts/.git/
+index-tts/.github/
+index-tts/.venv/
+index-tts/archive/
+index-tts/assets/
+index-tts/checkpoints/
+index-tts/docs/
+index-tts/examples/
+index-tts/tests/
+index-tts/uv.lock
