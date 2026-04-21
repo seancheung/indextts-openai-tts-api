@@ -4,14 +4,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # NOTE: /checkpoints must be writable — IndexTTS2 downloads a few auxiliary
-      # models (MaskGCT, CAM++, BigVGAN) into checkpoints/hf_cache on first run.
-      - ./checkpoints:/checkpoints
       - ./voices:/voices:ro
-      - ./cache:/root/.cache
+      - ./hf_cache:/root/.cache/huggingface
     environment:
-      INDEXTTS_MODEL_DIR: "/checkpoints"
-      INDEXTTS_DEVICE: "cuda"
+      INDEXTTS_MODEL: "IndexTeam/IndexTTS-2"
       INDEXTTS_USE_FP16: "true"
     deploy:
       resources:
@@ -26,9 +22,7 @@ services:
     ports:
       - "8010:8000"
     volumes:
-      - ./checkpoints:/checkpoints
       - ./voices:/voices:ro
-      - ./cache:/root/.cache
+      - ./hf_cache:/root/.cache/huggingface
     environment:
-      INDEXTTS_MODEL_DIR: "/checkpoints"
-      INDEXTTS_DEVICE: "cpu"
+      INDEXTTS_MODEL: "IndexTeam/IndexTTS-2"

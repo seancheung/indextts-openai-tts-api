@@ -11,10 +11,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore")
 
-    indextts_model_dir: str = Field(default="/checkpoints")
-    indextts_cfg_path: Optional[str] = Field(default=None)
+    indextts_model: str = Field(default="IndexTeam/IndexTTS-2")
     indextts_voices_dir: str = Field(default="/voices")
-    indextts_device: Literal["auto", "cuda", "mps", "cpu"] = Field(default="auto")
     indextts_cuda_index: int = Field(default=0)
     indextts_cache_dir: Optional[str] = Field(default=None)
 
@@ -46,27 +44,6 @@ class Settings(BaseSettings):
     @property
     def voices_path(self) -> Path:
         return Path(self.indextts_voices_dir)
-
-    @property
-    def resolved_cfg_path(self) -> str:
-        if self.indextts_cfg_path:
-            return self.indextts_cfg_path
-        return str(Path(self.indextts_model_dir) / "config.yaml")
-
-    @property
-    def resolved_device(self) -> str:
-        import torch
-
-        if self.indextts_device == "auto":
-            if torch.cuda.is_available():
-                return f"cuda:{self.indextts_cuda_index}"
-            mps = getattr(torch.backends, "mps", None)
-            if mps is not None and mps.is_available():
-                return "mps"
-            return "cpu"
-        if self.indextts_device == "cuda":
-            return f"cuda:{self.indextts_cuda_index}"
-        return self.indextts_device
 
 
 @lru_cache(maxsize=1)

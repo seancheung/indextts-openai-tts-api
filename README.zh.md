@@ -10,7 +10,7 @@
 - **零样本音色克隆**：挂载 `voices/` 目录下的 `xxx.wav` + `xxx.txt` 对，`.wav` 作为说话人参考，文件名（不含后缀）即音色 id
 - **情感控制**：额外提供 `POST /v1/audio/emotion`，暴露 IndexTTS2 的三种情感模式——情感参考音频、8 维情感向量、自然语言情感描述（内置 Qwen 分类器推断向量）
 - **2 个镜像**：`cuda` 与 `cpu`
-- **模型权重挂载而非打包**：`/checkpoints` 为可写卷，附属模型（MaskGCT、CAM++、BigVGAN）首次启动时下载并缓存到 `checkpoints/hf_cache`
+- **模型运行时下载**：不打包进镜像，HuggingFace 缓存目录挂载后可复用
 - **多种输出格式**：`mp3`、`opus`、`aac`、`flac`、`wav`、`pcm`
 
 ## 可用镜像
@@ -24,21 +24,7 @@
 
 ## 快速开始
 
-### 1. 准备 checkpoints 目录
-
-将 IndexTTS-2 权重下载到本地 `checkpoints/` 目录。
-
-```bash
-# 使用 huggingface-cli
-hf download IndexTeam/IndexTTS-2 --local-dir=checkpoints
-
-# 或使用 modelscope
-modelscope download --model IndexTeam/IndexTTS-2 --local_dir checkpoints
-```
-
-该目录必须包含 `config.yaml` 以及权重文件（`gpt.pth`、`s2mel.pth`、`bpe.model`、`wav2vec2bert_stats.pt`、`feat1.pt`、`feat2.pt`、`qwen0.6bemo4-merge/` 等）。整体体积约 10–15 GB。
-
-### 2. 准备音色目录
+### 1. 准备音色目录
 
 ```
 voices/
@@ -50,15 +36,14 @@ voices/
 
 **规则**：必须同时存在同名的 `.wav` 和 `.txt` 才会被识别为有效音色；文件名（不含后缀）即音色 id；多余或缺对的文件会被忽略。IndexTTS2 推理本身不使用 `.txt`，保留此文件便于人类校对，也会在 `/v1/audio/voices` 中返回。
 
-### 3. 运行容器
+### 2. 运行容器
 
 GPU 版本（推荐）：
 
 ```bash
 docker run --rm -p 8000:8000 --gpus all \
-  -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/cache:/root/.cache \
+  -v $PWD/hf_cache:/root/.cache/huggingface \
   ghcr.io/seancheung/indextts-openai-tts-api:cuda-latest
 ```
 
@@ -66,17 +51,16 @@ CPU 版本：
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/cache:/root/.cache \
+  -v $PWD/hf_cache:/root/.cache/huggingface \
   ghcr.io/seancheung/indextts-openai-tts-api:latest
 ```
 
-> **`/checkpoints` 必须可写**。IndexTTS2 会在首次启动时下载若干附属模型（MaskGCT 语义编解码、CAM++ 说话人编码、BigVGAN 声码器）到 `checkpoints/hf_cache`。不要加 `:ro`。
+首次启动会从 HuggingFace 下载 IndexTTS-2 快照（约 5.9 GB）以及附属模型（MaskGCT 语义编解码、CAM++ 说话人编码、BigVGAN 声码器）到挂载的 HuggingFace 缓存目录。挂载 `/root/.cache/huggingface` 可让权重在容器重启后复用。设 `INDEXTTS_MODEL=<hf-repo-or-local-path>` 可切换模型。
 
 > **GPU 要求**：宿主机需安装 NVIDIA 驱动与 [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)。Windows 需 Docker Desktop + WSL2 + NVIDIA Windows 驱动。IndexTTS2 在 fp16 下约需 10–15 GB 显存（fp32 更多）。
 
-### 4. docker-compose
+### 3. docker-compose
 
 参考 [`docker/docker-compose.example.yml`](./docker/docker-compose.example.yml)。
 
@@ -228,13 +212,11 @@ with client.audio.speech.with_streaming_response.create(
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `INDEXTTS_MODEL_DIR` | `/checkpoints` | 包含 `config.yaml` 与 IndexTTS-2 权重的目录（必须可写——附属模型会下载到其 `hf_cache/` 子目录） |
-| `INDEXTTS_CFG_PATH` | `${MODEL_DIR}/config.yaml` | 显式覆盖 config 路径 |
+| `INDEXTTS_MODEL` | `IndexTeam/IndexTTS-2` | HuggingFace 仓库 id *或* 本地目录路径。仓库 id 会在启动时自动下载到 HuggingFace 缓存目录。 |
 | `INDEXTTS_VOICES_DIR` | `/voices` | 音色目录 |
-| `INDEXTTS_DEVICE` | `auto` | `auto` 按 CUDA > MPS > CPU 优先级。也可强制 `cuda` / `mps` / `cpu` |
-| `INDEXTTS_CUDA_INDEX` | `0` | `cuda` / `auto` 时选择的 `cuda:N` |
-| `INDEXTTS_CACHE_DIR` | — | 设置后会在加载模型前写入 `HF_HOME` 和 `HF_HUB_CACHE` |
-| `INDEXTTS_USE_FP16` | `false` | 半精度（仅 CUDA，CPU/MPS 上被忽略） |
+| `INDEXTTS_CUDA_INDEX` | `0` | CUDA 镜像检测到 GPU 时选择的 `cuda:N` |
+| `INDEXTTS_CACHE_DIR` | — | 设置后会在加载 / 下载模型前写入 `HF_HOME` 和 `HF_HUB_CACHE` |
+| `INDEXTTS_USE_FP16` | `false` | 半精度（仅 CUDA 镜像有效；CPU 忽略） |
 | `INDEXTTS_USE_CUDA_KERNEL` | `false` | 启用 BigVGAN 融合 CUDA 激活核心（仅 CUDA） |
 | `INDEXTTS_USE_DEEPSPEED` | `false` | 启用 DeepSpeed 加速（仅 CUDA；镜像**未预装** DeepSpeed，需自建镜像加装） |
 | `INDEXTTS_USE_TORCH_COMPILE` | `false` | 启用 `torch.compile` 优化 GPT |
@@ -276,6 +258,7 @@ docker buildx build -f docker/Dockerfile.cpu \
 - **不做 OpenAI 固定音色名映射**（`alloy`、`echo`、`fable` 等）。IndexTTS2 本身是零样本；若想通过这些名字调用稳定的声音，直接在 `voices/` 放同名 `.wav` + `.txt` 即可。
 - **并发**：IndexTTS2 单实例非线程安全，服务内部用 asyncio Lock 串行化。并发请求依赖横向扩容（多容器 + 负载均衡）。
 - **长文本**：超过 `MAX_INPUT_CHARS`（默认 8000）返回 413。IndexTTS2 内部通过 `max_text_tokens_per_segment` 分段处理。
+- **首次启动会下载模型**：IndexTTS-2 快照（约 5.9 GB）及附属模型（MaskGCT、CAM++、BigVGAN）在首次启动时被拉取到挂载的 HuggingFace 缓存目录；后续启动会复用。
 - **首次请求较慢**：IndexTTS2 对处理后的 speaker/emotion 参考做了缓存。同一音色后续请求会复用缓存，速度比首次快 10–100 倍。
 - **不支持 HTTP 层流式返回**：生成完成后一次性返回。（IndexTTS2 本身支持 `stream_return`，服务层目前未暴露。）
 - **默认镜像未安装 DeepSpeed**（体积大、构建易失败）。设 `INDEXTTS_USE_DEEPSPEED=true` 前需在自定义镜像中 `pip install deepspeed==0.17.1`。

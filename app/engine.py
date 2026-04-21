@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 
 import numpy as np
 
@@ -27,18 +27,61 @@ def _ensure_sys_path() -> None:
 _ensure_sys_path()
 
 
+def _resolve_device(settings) -> str:
+    import torch
+
+    if torch.cuda.is_available():
+        return f"cuda:{settings.indextts_cuda_index}"
+    return "cpu"
+
+
+def _resolve_model_dir(settings) -> str:
+    model = settings.indextts_model
+
+    if os.path.isdir(model):
+        log.info("using local IndexTTS model dir: %s", model)
+        return model
+
+    from huggingface_hub import snapshot_download
+
+    log.info("downloading IndexTTS model snapshot: %s", model)
+    local_dir = snapshot_download(
+        repo_id=model,
+        cache_dir=settings.indextts_cache_dir or None,
+    )
+    log.info("model snapshot ready at %s", local_dir)
+    return local_dir
+
+
+def _restore_hf_cache_env() -> None:
+    """IndexTTS' upstream `infer_v2.py` force-sets `HF_HUB_CACHE` to a relative
+    `./checkpoints/hf_cache` path at import time, which silently redirects
+    auxiliary model downloads away from the user's mounted cache. Re-point it
+    back at the standard HuggingFace cache layout."""
+
+    hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+    os.environ["HF_HUB_CACHE"] = os.path.join(hf_home, "hub")
+
+
 class TTSEngine:
     def __init__(self, settings):
-        from indextts.infer_v2 import IndexTTS2
-
         self.settings = settings
-        self.device = settings.resolved_device
 
         if settings.indextts_cache_dir:
             os.environ.setdefault("HF_HOME", settings.indextts_cache_dir)
             os.environ.setdefault("HF_HUB_CACHE", settings.indextts_cache_dir)
 
-        self._validate_model_dir()
+        self.device = _resolve_device(settings)
+        model_dir = _resolve_model_dir(settings)
+
+        from indextts.infer_v2 import IndexTTS2
+
+        _restore_hf_cache_env()
+        cfg_path = str(Path(model_dir) / "config.yaml")
+        if not Path(cfg_path).exists():
+            raise RuntimeError(
+                f"config file {cfg_path} not found inside the IndexTTS model snapshot"
+            )
 
         is_cuda = self.device.startswith("cuda")
         use_fp16 = bool(settings.indextts_use_fp16 and is_cuda)
@@ -46,38 +89,25 @@ class TTSEngine:
         use_deepspeed = bool(settings.indextts_use_deepspeed and is_cuda)
 
         log.info(
-            "loading IndexTTS2 model_dir=%s cfg=%s device=%s fp16=%s cuda_kernel=%s deepspeed=%s",
-            settings.indextts_model_dir,
-            settings.resolved_cfg_path,
+            "loading IndexTTS2 model_dir=%s device=%s fp16=%s cuda_kernel=%s deepspeed=%s",
+            model_dir,
             self.device,
             use_fp16,
             use_cuda_kernel,
             use_deepspeed,
         )
         self.model = IndexTTS2(
-            cfg_path=settings.resolved_cfg_path,
-            model_dir=settings.indextts_model_dir,
+            cfg_path=cfg_path,
+            model_dir=model_dir,
             use_fp16=use_fp16,
             device=self.device,
             use_cuda_kernel=use_cuda_kernel,
             use_deepspeed=use_deepspeed,
             use_torch_compile=settings.indextts_use_torch_compile,
         )
+        self.model_dir = model_dir
         self.sample_rate = 22050
         self._lock = asyncio.Lock()
-
-    def _validate_model_dir(self) -> None:
-        p = Path(self.settings.indextts_model_dir)
-        if not p.exists() or not p.is_dir():
-            raise RuntimeError(
-                f"model_dir {p} not found; mount a checkpoint directory with "
-                "config.yaml and the required IndexTTS-2 weight files."
-            )
-        cfg = Path(self.settings.resolved_cfg_path)
-        if not cfg.exists():
-            raise RuntimeError(
-                f"config file {cfg} not found; expected inside the IndexTTS-2 checkpoint directory."
-            )
 
     def _gen_kwargs(self, params) -> dict:
         s = self.settings

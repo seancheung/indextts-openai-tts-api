@@ -49,10 +49,10 @@ async def healthz(request: Request) -> HealthResponse:
     settings = request.app.state.settings
     engine: TTSEngine | None = request.app.state.engine
     if engine is None:
-        return HealthResponse(status="loading", model=settings.indextts_model_dir)
+        return HealthResponse(status="loading", model=settings.indextts_model)
     return HealthResponse(
         status="ok",
-        model=settings.indextts_model_dir,
+        model=settings.indextts_model,
         device=engine.device,
         sample_rate=engine.sample_rate,
     )

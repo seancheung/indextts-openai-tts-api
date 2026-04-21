@@ -10,7 +10,7 @@ An [OpenAI TTS](https://platform.openai.com/docs/api-reference/audio/createSpeec
 - **Zero-shot voice cloning** — each voice is a `xxx.wav` + `xxx.txt` pair in a mounted directory; the `.wav` is used as the speaker reference and the stem becomes the voice id
 - **Emotion control** — extra `POST /v1/audio/emotion` endpoint exposes IndexTTS2's three emotion modes: reference audio, 8-dim emotion vector, or natural-language description (routed through the built-in Qwen classifier)
 - **2 images** — `cuda` and `cpu`
-- **Model weights mounted, not baked** — `/checkpoints` is a writable volume; auxiliary models (MaskGCT, CAM++, BigVGAN) are fetched on first run and cached under `checkpoints/hf_cache`
+- **Model weights downloaded at runtime** — nothing heavy baked into the image; the HuggingFace cache is mounted for reuse
 - **Multiple output formats** — `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`
 
 ## Available images
@@ -24,21 +24,7 @@ Images are built for `linux/amd64`.
 
 ## Quick start
 
-### 1. Prepare the checkpoints directory
-
-Download the IndexTTS-2 weights into a local `checkpoints/` directory.
-
-```bash
-# via huggingface-cli
-hf download IndexTeam/IndexTTS-2 --local-dir=checkpoints
-
-# or via modelscope
-modelscope download --model IndexTeam/IndexTTS-2 --local_dir checkpoints
-```
-
-The directory must contain `config.yaml` plus the weight files (`gpt.pth`, `s2mel.pth`, `bpe.model`, `wav2vec2bert_stats.pt`, `feat1.pt`, `feat2.pt`, `qwen0.6bemo4-merge/`, …). Total size is roughly 10–15 GB.
-
-### 2. Prepare the voices directory
+### 1. Prepare the voices directory
 
 ```
 voices/
@@ -50,15 +36,14 @@ voices/
 
 **Rules**: a voice is valid only when both files with the same stem exist; the stem is the voice id; unpaired or extra files are ignored. IndexTTS2's inference does not require the transcript, but the `.txt` is kept for human review and appears in `/v1/audio/voices`.
 
-### 3. Run the container
+### 2. Run the container
 
 GPU (recommended):
 
 ```bash
 docker run --rm -p 8000:8000 --gpus all \
-  -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/cache:/root/.cache \
+  -v $PWD/hf_cache:/root/.cache/huggingface \
   ghcr.io/seancheung/indextts-openai-tts-api:cuda-latest
 ```
 
@@ -66,17 +51,16 @@ CPU:
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -v $PWD/checkpoints:/checkpoints \
   -v $PWD/voices:/voices:ro \
-  -v $PWD/cache:/root/.cache \
+  -v $PWD/hf_cache:/root/.cache/huggingface \
   ghcr.io/seancheung/indextts-openai-tts-api:latest
 ```
 
-> **`/checkpoints` must be writable.** IndexTTS2 downloads a few auxiliary models (MaskGCT semantic codec, CAM++ speaker encoder, BigVGAN vocoder) into `checkpoints/hf_cache` on first start. Do not mount it as `:ro`.
+On first start the service downloads the IndexTTS-2 snapshot (≈5.9 GB) plus a few auxiliary models (MaskGCT semantic codec, CAM++ speaker encoder, BigVGAN vocoder) into the mounted HuggingFace cache. Mounting `/root/.cache/huggingface` persists them across container restarts. Set `INDEXTTS_MODEL=<hf-repo-or-local-path>` to override the model.
 
 > **GPU prerequisites**: NVIDIA driver + [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) on Linux. On Windows use Docker Desktop + WSL2 + NVIDIA Windows driver; no host CUDA toolkit required. IndexTTS2 needs roughly 10–15 GB VRAM with fp16 (more with fp32).
 
-### 4. docker-compose
+### 3. docker-compose
 
 See [`docker/docker-compose.example.yml`](./docker/docker-compose.example.yml).
 
@@ -228,13 +212,11 @@ Returns `status`, `model` (checkpoint dir), `device`, and `sample_rate` for heal
 
 | Variable | Default | Description |
 |---|---|---|
-| `INDEXTTS_MODEL_DIR` | `/checkpoints` | Directory with `config.yaml` and IndexTTS-2 weights (must be writable — auxiliary models are downloaded into `hf_cache/` inside it) |
-| `INDEXTTS_CFG_PATH` | `${MODEL_DIR}/config.yaml` | Override the config file path |
+| `INDEXTTS_MODEL` | `IndexTeam/IndexTTS-2` | HuggingFace repo id *or* local directory path. Repo ids are snapshot-downloaded into the HuggingFace cache on startup. |
 | `INDEXTTS_VOICES_DIR` | `/voices` | Voices directory |
-| `INDEXTTS_DEVICE` | `auto` | `auto` → CUDA > MPS > CPU. Or `cuda` / `mps` / `cpu` |
-| `INDEXTTS_CUDA_INDEX` | `0` | Selects `cuda:N` when device is `cuda` or `auto` |
-| `INDEXTTS_CACHE_DIR` | — | When set, seeds `HF_HOME` and `HF_HUB_CACHE` before model load |
-| `INDEXTTS_USE_FP16` | `false` | Half-precision (CUDA only; ignored on CPU/MPS) |
+| `INDEXTTS_CUDA_INDEX` | `0` | Selects `cuda:N` when the CUDA image detects a GPU |
+| `INDEXTTS_CACHE_DIR` | — | When set, seeds `HF_HOME` and `HF_HUB_CACHE` before the model is loaded / downloaded |
+| `INDEXTTS_USE_FP16` | `false` | Half-precision (CUDA image only; ignored on CPU) |
 | `INDEXTTS_USE_CUDA_KERNEL` | `false` | Enable BigVGAN fused CUDA activation kernels (CUDA only) |
 | `INDEXTTS_USE_DEEPSPEED` | `false` | Enable DeepSpeed acceleration (CUDA only; DeepSpeed is not installed in the shipped image — build a custom image if you need it) |
 | `INDEXTTS_USE_TORCH_COMPILE` | `false` | Enable `torch.compile` for the GPT stack |
@@ -276,6 +258,7 @@ docker buildx build -f docker/Dockerfile.cpu \
 - **No built-in OpenAI voice names** (`alloy`, `echo`, `fable`, …). IndexTTS2 is zero-shot; drop `alloy.wav` + `alloy.txt` into `voices/` to bind the name.
 - **Concurrency**: a single IndexTTS2 instance is not thread-safe; the service serializes inference with an asyncio Lock. Scale out with more containers behind a load balancer.
 - **Long text**: requests whose `input` exceeds `MAX_INPUT_CHARS` (default 8000) return 413. IndexTTS2 splits long text into segments internally (`max_text_tokens_per_segment`).
+- **First start downloads the model**: the IndexTTS-2 snapshot (≈5.9 GB) plus auxiliary models (MaskGCT, CAM++, BigVGAN) are pulled into the mounted HuggingFace cache on first boot; subsequent starts reuse them.
 - **First request is slow**: IndexTTS2 caches the processed speaker/emotion reference. Repeated requests against the same voice reuse the cache and are 10–100× faster than the first call.
 - **Streaming is not supported** on the HTTP layer — the endpoint returns the complete audio when generation finishes. (IndexTTS2 supports `stream_return` internally; exposing it here is future work.)
 - **DeepSpeed is not installed in the default images** because of its size and build fragility. Set `INDEXTTS_USE_DEEPSPEED=true` only after extending the image to `pip install deepspeed==0.17.1`.
